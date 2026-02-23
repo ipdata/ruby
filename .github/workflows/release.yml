@@ -75,7 +75,7 @@ jobs:
           ruby-version: "3.3"
 
       - name: Run tests
-        run: ruby -Ilib -Itest -e "Dir['test/test_*.rb'].each { |f| require_relative f }"
+        run: ruby -Ilib -Itest -e "Dir['test/test_*.rb'].each { |f| require f }"
 
       - name: Build gem
         run: gem build ipdata.gemspec
