@@ -24,7 +24,7 @@ jobs:
           ruby-version: ${{ matrix.ruby-version }}
 
       - name: Run tests
-        run: ruby -Ilib -Itest -e "Dir['test/test_*.rb'].each { |f| require_relative f }"
+        run: ruby -Ilib -Itest -e "Dir['test/test_*.rb'].each { |f| require f }"
 
       - name: Verify gem builds
         run: gem build ipdata.gemspec
