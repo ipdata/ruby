@@ -73,12 +73,10 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
+          bundler-cache: true
 
       - name: Run tests
-        run: ruby -Ilib -Itest -e "Dir['test/test_*.rb'].each { |f| require File.expand_path(f) }"
-
-      - name: Build gem
-        run: gem build ipdata.gemspec
+        run: bundle exec rake test
 
       - name: Push to RubyGems
         uses: rubygems/release-gem@v1
