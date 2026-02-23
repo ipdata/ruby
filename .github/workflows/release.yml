@@ -1,0 +1,32 @@
+# frozen_string_literal: true
+
+name: Publish to RubyGems
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Run tests
+        run: ruby -Ilib -Itest -e "Dir['test/test_*.rb'].each { |f| require_relative f }"
+
+      - name: Build gem
+        run: gem build ipdata.gemspec
+
+      - name: Push to RubyGems
+        uses: rubygems/release-gem@v1
