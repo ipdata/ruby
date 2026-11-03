@@ -12,7 +12,7 @@ Gem::Specification.new do |spec|
   spec.description   = "Official Ruby SDK for the ipdata.co API. " \
                         "Look up geolocation, threat intelligence, ASN, company, " \
                         "carrier, currency, timezone and language data for any IP address."
-  spec.homepage      = "https://github.com/ipdata/ruby"
+  spec.homepage      = "https://ipdata.co"
   spec.license       = "MIT"
 
   spec.required_ruby_version = ">= 3.0"
@@ -25,8 +25,8 @@ Gem::Specification.new do |spec|
     "documentation_uri" => "https://docs.ipdata.co"
   }
 
-  spec.files = Dir["lib/**/*.rb", "LICENSE", "README.md"]
+  spec.files = Dir["lib/**/*.rb", "CHANGELOG.md", "LICENSE", "README.md"]
   spec.require_paths = ["lib"]
 
-  # Zero runtime dependencies — uses only Ruby stdlib (net/http, json, uri, monitor)
+  # Zero runtime dependencies — uses only Ruby stdlib (net/http, openssl, json, uri, monitor)
 end
