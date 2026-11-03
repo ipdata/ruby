@@ -260,6 +260,12 @@ bundle install
 bundle exec rake test
 ```
 
+## Releasing
+
+Bump `VERSION` in `lib/ipdata/version.rb` in a pull request and merge it. CI then tags the merge commit `vx.y.z`, creates the GitHub release and publishes the gem to RubyGems. A merge whose version is already tagged publishes nothing.
+
+The *Publish to RubyGems* workflow can also be run manually with a `bump` input (`patch`, `minor` or `major`): it commits the bump to `main`, tags it and publishes the gem in the same run.
+
 ## License
 
 [MIT](LICENSE)

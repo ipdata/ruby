@@ -27,3 +27,65 @@ jobs:
 
       - name: Verify gem builds
         run: gem build ipdata.gemspec
+
+  # After a push to the default branch, tag the commit and create the GitHub
+  # release when lib/ipdata/version.rb holds a version that is not tagged yet.
+  release:
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      created: ${{ steps.release.outputs.created }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tag and release a new version
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -nE 's/.*VERSION *= *"([^"]+)".*/\1/p' lib/ipdata/version.rb | head -1)
+          if [ -z "$version" ]; then
+            echo "Could not read the version from lib/ipdata/version.rb" >&2
+            exit 1
+          fi
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/${tag}" > /dev/null || status=$?
+          case "$status" in
+            0)
+              echo "Tag ${tag} already exists; nothing to release."
+              echo "created=false" >> "$GITHUB_OUTPUT"
+              ;;
+            2)
+              gh release create "${tag}" --target "$GITHUB_SHA" --title "${tag}" --generate-notes
+              echo "Created tag and release ${tag} from ${GITHUB_SHA}."
+              echo "created=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Could not check whether tag ${tag} exists (git ls-remote exited with ${status})." >&2
+              exit "$status"
+              ;;
+          esac
+
+  # A tag created with the workflow token does not start other workflows, so
+  # the gem is published from this run through the reusable release workflow.
+  publish:
+    needs: release
+    if: needs.release.outputs.created == 'true'
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+    secrets: inherit
