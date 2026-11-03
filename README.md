@@ -118,8 +118,31 @@ client.lookup("8.8.8.8") # served from cache
 ### Custom Timeout
 
 ```ruby
-client = IPData::Client.new("YOUR_API_KEY", timeout: 10) # 10 seconds
+client = IPData::Client.new("YOUR_API_KEY", timeout: 10) # 10 seconds to connect, read and write
 ```
+
+## Connection reuse
+
+An `IPData::Client` keeps one persistent HTTPS connection (HTTP/1.1 keep-alive) for as long as it lives. Create one client per process (or one per API key or endpoint), keep it, and reuse it for every lookup: each new client pays a fresh TLS handshake. HTTP/2 is not available with Ruby's `Net::HTTP`, so the saving is the TLS handshake, not multiplexing.
+
+A client is safe to share between threads, but it serialises requests on its single connection, so use one client per thread when you need lookups to run in parallel. Create clients after forking (for example in your web server's after-fork hook): a client inherited from the parent process notices the new process id and opens its own connection instead of reusing the parent's socket, which it never closes. Call `close` at shutdown to finish the connection; the client stays usable and reconnects on the next request.
+
+```ruby
+client = IPData::Client.new("YOUR_API_KEY")
+
+client.lookup("8.8.8.8") # opens the connection (TCP + TLS handshake)
+client.lookup("1.1.1.1") # reuses it
+
+at_exit { client.close }
+```
+
+The connection is opened on the first request. An idle connection is kept for `keep_alive_timeout:` seconds (default 60); after that the next request opens a new one. `timeout:` applies to connecting, reading and writing.
+
+```ruby
+client = IPData::Client.new("YOUR_API_KEY", keep_alive_timeout: 30)
+```
+
+If the server has silently dropped an idle connection, `lookup` (a `GET`) is retried once by `Net::HTTP` and `bulk_lookup` (a `POST`) once by the client, in both cases on a fresh connection and only when the failure happened before any response byte arrived. Nothing is retried on an HTTP error status.
 
 ## Response Fields
 
