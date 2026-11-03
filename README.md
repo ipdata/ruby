@@ -161,6 +161,8 @@ response.continent_name
 response.latitude
 response.longitude
 response.is_eu
+response.is_satellite # satellite ISP; sent only when true, reads false otherwise
+response.is_anycast   # anycast address; sent only when true, reads false otherwise
 response.postal
 response.calling_code
 response.flag
@@ -205,7 +207,10 @@ response.threat.is_known_attacker
 response.threat.is_known_abuser
 response.threat.is_threat
 response.threat.is_bogon
-response.threat.blocklists
+response.threat.blocklists                  # array of entries: name, site, type and, when the feed reports them:
+response.threat.blocklists.first.first_seen # first day listed, "YYYY-MM-DD" (UTC); absent for some feeds
+response.threat.blocklists.first.last_seen  # last day listed, "YYYY-MM-DD" (UTC); absent for some feeds
+response.threat.blocklists.first.days_seen  # number of days listed (integer); absent for some feeds
 response.threat.scores
 
 # Languages (array)
@@ -220,6 +225,8 @@ response[:country_code]
 # Raw hash
 response.to_h
 ```
+
+`is_satellite` and `is_anycast` are included in the API response only when they are true. `response.is_satellite` and `response.is_anycast` read `false` when the key is absent, while `response["is_satellite"]`, `response.key?("is_satellite")` and `response.to_h` reflect the raw response (`nil`, `false` and no key). Each `threat.blocklists` entry carries `first_seen` and `last_seen` (calendar dates as `"YYYY-MM-DD"` strings, UTC) and `days_seen` (an integer) when the feed reports them; some feeds, for example ipdata's own vpn feed, omit all three, so read them with `entry["first_seen"]` (`nil` when absent) or check `entry.key?("first_seen")`. The dates are kept as strings; use `Date.iso8601(entry.first_seen)` if you need `Date` objects.
 
 ## Error Handling
 

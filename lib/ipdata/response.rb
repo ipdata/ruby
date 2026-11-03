@@ -14,6 +14,9 @@ module IPData
   #
   # Nested hashes are recursively wrapped as Response objects.
   # Arrays of hashes (e.g. languages, blocklists) are mapped to Response arrays.
+  #
+  # Keys the API sends only when they are true (+is_satellite+, +is_anycast+)
+  # have explicit readers that return false when the key is absent.
   class Response
     def initialize(data)
       @data = data || {}
@@ -22,6 +25,23 @@ module IPData
     # Hash-style access. Accepts string or symbol keys.
     def [](key)
       wrap(@data[key.to_s])
+    end
+
+    # Whether the address belongs to a satellite internet provider.
+    #
+    # The API includes the +is_satellite+ key only when it is true, so this
+    # reads +false+ when the key is absent instead of raising NoMethodError.
+    # The raw hash (+to_h+, +[]+, +key?+) is left untouched.
+    def is_satellite
+      @data.fetch("is_satellite", false)
+    end
+
+    # Whether the address is anycast (announced from several locations at once).
+    #
+    # The API includes the +is_anycast+ key only when it is true, so this
+    # reads +false+ when the key is absent. The raw hash is left untouched.
+    def is_anycast
+      @data.fetch("is_anycast", false)
     end
 
     # Returns the underlying raw Hash.

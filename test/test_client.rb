@@ -453,6 +453,70 @@ class TestClient < Minitest::Test
     assert_equal 1, max_in_flight, "requests must not overlap on the shared connection"
   end
 
+  # --- is_satellite / is_anycast and blocklist dates ---
+
+  def test_lookup_exposes_is_satellite
+    body = JSON.generate(SAMPLE_SATELLITE_RESPONSE)
+    assert_request(:get, "/98.97.34.0", query: { "api-key" => API_KEY }, body: body) do
+      response = @client.lookup("98.97.34.0")
+      assert_equal true, response.is_satellite
+      assert_equal false, response.is_anycast
+      assert_equal "AS14593", response.asn.asn
+    end
+  end
+
+  def test_lookup_exposes_is_anycast_and_dated_blocklist_entries
+    body = JSON.generate(SAMPLE_ANYCAST_RESPONSE)
+    assert_request(:get, "/8.8.8.8", query: { "api-key" => API_KEY }, body: body) do
+      response = @client.lookup("8.8.8.8")
+      assert_equal true, response.is_anycast
+      assert_equal false, response.is_satellite
+
+      entry = response.threat.blocklists.first
+      assert_equal "2026-11-02", entry.first_seen
+      assert_equal "2026-11-02", entry.last_seen
+      assert_equal 1, entry.days_seen
+    end
+  end
+
+  def test_fields_accept_the_new_flag_names
+    query = { "api-key" => API_KEY, "fields" => "ip,is_satellite,is_anycast" }
+    assert_request(:get, "/8.8.8.8", query: query, body: JSON.generate("ip" => "8.8.8.8")) do
+      response = @client.lookup("8.8.8.8", fields: ["ip", "is_satellite", "is_anycast"])
+      assert_equal "8.8.8.8", response.ip
+      assert_equal false, response.is_satellite
+      assert_equal false, response.is_anycast
+    end
+  end
+
+  def test_select_field_accepts_the_new_flag_names
+    assert_request(:get, "/98.97.34.0/is_satellite", query: { "api-key" => API_KEY }, body: "true") do
+      assert_equal true, @client.lookup("98.97.34.0", select_field: "is_satellite")
+    end
+  end
+
+  def test_bulk_lookup_items_carry_the_new_fields
+    ips = ["8.8.8.8", "187.13.250.1"]
+    body = JSON.generate([SAMPLE_ANYCAST_RESPONSE, SAMPLE_VPN_RESPONSE])
+
+    assert_request(:post, "/bulk", query: { "api-key" => API_KEY }, body: body, request_body: JSON.generate(ips)) do
+      anycast, vpn = @client.bulk_lookup(ips)
+
+      assert_equal true, anycast.is_anycast
+      assert_equal false, anycast.is_satellite
+      assert_equal "2026-11-02", anycast.threat.blocklists.first.first_seen
+
+      assert_equal false, vpn.is_anycast
+      assert_equal false, vpn.is_satellite
+      assert_equal true, vpn.threat.is_vpn
+      assert_equal 6, vpn.threat.blocklists.size
+      assert_equal "2026-10-31", vpn.threat.blocklists.first.first_seen
+      assert_equal 2, vpn.threat.blocklists.first.days_seen
+      refute vpn.threat.blocklists[2].key?("first_seen")
+      assert_nil vpn.threat.blocklists[2]["days_seen"]
+    end
+  end
+
   private
 
   # Helper to assert a request was made with expected parameters.

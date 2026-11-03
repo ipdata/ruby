@@ -224,6 +224,141 @@ class TestResponse < Minitest::Test
     assert_raises(NoMethodError) { @response.nonexistent_field }
   end
 
+  # --- is_satellite / is_anycast (sent by the API only when true) ---
+
+  def test_is_satellite_reads_true_when_present
+    response = IPData::Response.new(SAMPLE_SATELLITE_RESPONSE)
+    assert_equal true, response.is_satellite
+    assert_equal true, response["is_satellite"]
+    assert response.key?("is_satellite")
+  end
+
+  def test_is_anycast_reads_true_when_present
+    response = IPData::Response.new(SAMPLE_ANYCAST_RESPONSE)
+    assert_equal true, response.is_anycast
+    assert_equal true, response[:is_anycast]
+    assert response.key?(:is_anycast)
+  end
+
+  def test_new_flags_read_false_when_absent
+    assert_equal false, @response.is_satellite
+    assert_equal false, @response.is_anycast
+
+    assert_equal false, IPData::Response.new(SAMPLE_SATELLITE_RESPONSE).is_anycast
+    assert_equal false, IPData::Response.new(SAMPLE_ANYCAST_RESPONSE).is_satellite
+
+    vpn = IPData::Response.new(SAMPLE_VPN_RESPONSE)
+    assert_equal false, vpn.is_satellite
+    assert_equal false, vpn.is_anycast
+  end
+
+  def test_new_flags_leave_the_raw_hash_untouched
+    refute @response.key?("is_satellite")
+    refute @response.key?("is_anycast")
+    assert_nil @response["is_satellite"]
+    assert_nil @response[:is_anycast]
+    assert_equal SAMPLE_RESPONSE, @response.to_h
+
+    keys = []
+    @response.each { |k, _v| keys << k }
+    refute_includes keys, "is_satellite"
+    refute_includes keys, "is_anycast"
+    refute_includes JSON.parse(@response.to_json).keys, "is_satellite"
+  end
+
+  def test_new_flags_are_always_responded_to
+    assert_respond_to @response, :is_satellite
+    assert_respond_to @response, :is_anycast
+    assert_respond_to IPData::Response.new(SAMPLE_SATELLITE_RESPONSE), :is_satellite
+  end
+
+  def test_satellite_sample_other_fields
+    response = IPData::Response.new(SAMPLE_SATELLITE_RESPONSE)
+    assert_equal "98.97.34.0", response.ip
+    assert_equal false, response.is_eu
+    assert_equal "Seattle", response.city
+    assert_equal "AS14593", response.asn.asn
+    assert_equal "spacex.com", response.asn.domain
+    assert_empty response.threat.blocklists
+    assert_equal 97, response.threat.scores.trust_score
+  end
+
+  def test_anycast_sample_null_fields_pass_through
+    response = IPData::Response.new(SAMPLE_ANYCAST_RESPONSE)
+    assert_nil response.city
+    assert_nil response.region_type
+    assert_nil response.time_zone.name
+    assert_equal "hosting", response.asn.type
+    assert_equal "about.google", response.company.domain
+    assert_equal true, response.threat.is_datacenter
+  end
+
+  # --- Blocklist entries: first_seen, last_seen, days_seen ---
+
+  def test_blocklist_entries_carry_dates_and_days_seen
+    blocklists = IPData::Response.new(SAMPLE_ANYCAST_RESPONSE).threat.blocklists
+    assert_equal 2, blocklists.size
+
+    entry = blocklists.first
+    assert_instance_of IPData::Response, entry
+    assert_equal "ipdata", entry.name
+    assert_equal "https://ipdata.co", entry.site
+    assert_equal "cloud", entry.type
+    assert_equal 1, entry.days_seen
+    assert_equal "2026-11-02", entry.first_seen
+    assert_equal "2026-11-02", entry.last_seen
+    assert_equal "open_resolvers", blocklists.last.type
+  end
+
+  def test_blocklist_dates_stay_strings
+    entry = IPData::Response.new(SAMPLE_VPN_RESPONSE).threat.blocklists.first
+    assert_equal "Gluetun", entry.name
+    assert_instance_of String, entry.first_seen
+    assert_instance_of String, entry.last_seen
+    assert_equal "2026-10-31", entry.first_seen
+    assert_equal "2026-11-02", entry.last_seen
+    assert_equal "2026-10-31", entry["first_seen"]
+    assert_equal 2, entry.days_seen
+    assert_kind_of Integer, entry.days_seen
+  end
+
+  def test_blocklist_entry_without_dates
+    blocklists = IPData::Response.new(SAMPLE_VPN_RESPONSE).threat.blocklists
+    assert_equal 6, blocklists.size
+    assert_equal 5, blocklists.count { |entry| entry.key?("first_seen") }
+
+    undated = blocklists[2]
+    assert_equal "ipdata", undated.name
+    assert_equal "https://ipdata.co", undated.site
+    assert_equal "vpn", undated.type
+    refute undated.key?("first_seen")
+    refute undated.key?("last_seen")
+    refute undated.key?("days_seen")
+    assert_nil undated["first_seen"]
+    assert_nil undated["last_seen"]
+    assert_nil undated[:days_seen]
+    refute_respond_to undated, :first_seen
+    assert_equal({ "name" => "ipdata", "site" => "https://ipdata.co", "type" => "vpn" }, undated.to_h)
+  end
+
+  def test_vpn_sample_threat_flags
+    threat = IPData::Response.new(SAMPLE_VPN_RESPONSE).threat
+    assert_equal true, threat.is_vpn
+    assert_equal true, threat.is_anonymous
+    assert_equal true, threat.is_threat
+    assert_equal false, threat.is_tor
+    assert_equal 0, threat.scores.trust_score
+  end
+
+  # --- Unknown keys ---
+
+  def test_unknown_keys_pass_through
+    response = IPData::Response.new(SAMPLE_RESPONSE.merge("some_future_field" => { "x" => 1 }))
+    assert_equal 1, response.some_future_field.x
+    assert_equal({ "x" => 1 }, response["some_future_field"].to_h)
+    assert_equal "8.8.8.8", response.ip
+  end
+
   # --- Edge cases ---
 
   def test_nil_data

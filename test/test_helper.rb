@@ -86,6 +86,143 @@ module IPDataFixtures
     SAMPLE_RESPONSE.merge("ip" => "1.1.1.1", "city" => "Los Angeles", "country_name" => "Australia")
   ].freeze
 
+  # Sample A: satellite ISP. The API includes is_satellite only when it is true.
+  SAMPLE_SATELLITE_RESPONSE = {
+    "ip" => "98.97.34.0",
+    "is_satellite" => true,
+    "is_eu" => false,
+    "city" => "Seattle",
+    "country_code" => "US",
+    "asn" => {
+      "asn" => "AS14593",
+      "name" => "Space Exploration Technologies Corporation",
+      "domain" => "spacex.com",
+      "route" => "98.97.32.0/21",
+      "type" => "business"
+    },
+    "threat" => {
+      "is_tor" => false,
+      "is_vpn" => false,
+      "is_icloud_relay" => false,
+      "is_proxy" => false,
+      "is_datacenter" => false,
+      "is_anonymous" => false,
+      "is_known_attacker" => false,
+      "is_known_abuser" => false,
+      "is_threat" => false,
+      "is_bogon" => false,
+      "blocklists" => [],
+      "scores" => { "vpn_score" => 0, "proxy_score" => 1, "threat_score" => 8, "trust_score" => 97 }
+    },
+    "count" => "0"
+  }.freeze
+
+  # Sample B: anycast address with dated blocklist entries (complete response).
+  SAMPLE_ANYCAST_RESPONSE = {
+    "ip" => "8.8.8.8",
+    "is_anycast" => true,
+    "is_eu" => false,
+    "city" => nil,
+    "region" => nil,
+    "region_code" => nil,
+    "region_type" => nil,
+    "country_name" => "United States",
+    "country_code" => "US",
+    "continent_name" => "North America",
+    "continent_code" => "NA",
+    "latitude" => 39.7599983215332,
+    "longitude" => -98.5,
+    "postal" => nil,
+    "calling_code" => "1",
+    "flag" => "https://ipdata.co/flags/us.png",
+    "emoji_flag" => "\u{1F1FA}\u{1F1F8}",
+    "emoji_unicode" => "U+1F1FA U+1F1F8",
+    "asn" => {
+      "asn" => "AS15169",
+      "name" => "Google LLC",
+      "domain" => "about.google",
+      "route" => "8.8.8.0/24",
+      "type" => "hosting"
+    },
+    "company" => {
+      "name" => "Google LLC",
+      "domain" => "about.google",
+      "network" => "8.8.8.0/24",
+      "type" => "hosting"
+    },
+    "languages" => [
+      { "name" => "English", "native" => "English", "code" => "en" }
+    ],
+    "currency" => {
+      "name" => "US Dollar",
+      "code" => "USD",
+      "symbol" => "$",
+      "native" => "$",
+      "plural" => "US dollars"
+    },
+    "time_zone" => {
+      "name" => nil,
+      "abbr" => nil,
+      "offset" => nil,
+      "is_dst" => nil,
+      "current_time" => nil
+    },
+    "threat" => {
+      "is_tor" => false,
+      "is_vpn" => false,
+      "is_icloud_relay" => false,
+      "is_proxy" => false,
+      "is_datacenter" => true,
+      "is_anonymous" => false,
+      "is_known_attacker" => false,
+      "is_known_abuser" => false,
+      "is_threat" => false,
+      "is_bogon" => false,
+      "blocklists" => [
+        { "days_seen" => 1, "first_seen" => "2026-11-02", "last_seen" => "2026-11-02",
+          "name" => "ipdata", "site" => "https://ipdata.co", "type" => "cloud" },
+        { "days_seen" => 1, "first_seen" => "2026-11-02", "last_seen" => "2026-11-02",
+          "name" => "ipdata", "site" => "https://ipdata.co", "type" => "open_resolvers" }
+      ],
+      "scores" => { "vpn_score" => 100, "proxy_score" => 93, "threat_score" => 100, "trust_score" => 2 }
+    },
+    "count" => "0"
+  }.freeze
+
+  # Sample C: VPN exit (excerpt). Neither top-level flag is present, and the
+  # third blocklist entry (ipdata's own vpn feed) carries no dates.
+  SAMPLE_VPN_RESPONSE = {
+    "ip" => "187.13.250.1",
+    "is_eu" => false,
+    "threat" => {
+      "is_tor" => false,
+      "is_vpn" => true,
+      "is_icloud_relay" => false,
+      "is_proxy" => false,
+      "is_datacenter" => true,
+      "is_anonymous" => true,
+      "is_known_attacker" => true,
+      "is_known_abuser" => true,
+      "is_threat" => true,
+      "is_bogon" => false,
+      "blocklists" => [
+        { "days_seen" => 2, "first_seen" => "2026-10-31", "last_seen" => "2026-11-02",
+          "name" => "Gluetun", "site" => "https://github.com/qdm12/gluetun", "type" => "vpn" },
+        { "days_seen" => 1, "first_seen" => "2026-11-02", "last_seen" => "2026-11-02",
+          "name" => "ipdata", "site" => "https://ipdata.co", "type" => "cloud" },
+        { "name" => "ipdata", "site" => "https://ipdata.co", "type" => "vpn" },
+        { "days_seen" => 2, "first_seen" => "2026-10-31", "last_seen" => "2026-11-02",
+          "name" => "NordVPN", "site" => "https://nordvpn.com", "type" => "vpn" },
+        { "days_seen" => 2, "first_seen" => "2026-10-31", "last_seen" => "2026-11-02",
+          "name" => "Wikimedia Global Blocklist", "site" => "https://wikimedia.org", "type" => "general" },
+        { "days_seen" => 2, "first_seen" => "2026-10-31", "last_seen" => "2026-11-02",
+          "name" => "X4BNet", "site" => "https://github.com/X4BNet/lists_vpn", "type" => "vpn" }
+      ],
+      "scores" => { "vpn_score" => 100, "proxy_score" => 99, "threat_score" => 100, "trust_score" => 0 }
+    },
+    "count" => "0"
+  }.freeze
+
   # Helper to create a stubbed Net::HTTP response.
   def stub_http_response(status: "200", body: nil)
     response = Net::HTTPResponse.allocate
