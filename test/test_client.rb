@@ -31,6 +31,27 @@ class TestClient < Minitest::Test
     assert_instance_of IPData::Client, client
   end
 
+  def test_base_url_path_prefix_is_kept_in_request_paths
+    prefixed = -> { IPData::Client.new(API_KEY, base_url: "https://gateway.example.com/ipdata") }
+
+    assert_request(:get, "/ipdata/8.8.8.8", query: { "api-key" => API_KEY }) { prefixed.call.lookup("8.8.8.8") }
+    assert_request(:get, "/ipdata/", query: { "api-key" => API_KEY }) { prefixed.call.lookup }
+    assert_request(:get, "/ipdata/8.8.8.8/city", query: { "api-key" => API_KEY }, body: '"Mountain View"') do
+      assert_equal "Mountain View", prefixed.call.lookup("8.8.8.8", select_field: "city")
+    end
+    assert_request(:post, "/ipdata/bulk", query: { "api-key" => API_KEY }, body: JSON.generate(SAMPLE_BULK_RESPONSE)) do
+      assert_equal 2, prefixed.call.bulk_lookup(["8.8.8.8", "1.1.1.1"]).size
+    end
+  end
+
+  def test_base_url_trailing_slash_does_not_double_the_path_separator
+    client = IPData::Client.new(API_KEY, base_url: "https://gateway.example.com/ipdata/")
+    assert_request(:get, "/ipdata/8.8.8.8", query: { "api-key" => API_KEY }) { client.lookup("8.8.8.8") }
+
+    client = IPData::Client.new(API_KEY, base_url: "https://api.ipdata.co/")
+    assert_request(:get, "/8.8.8.8", query: { "api-key" => API_KEY }) { client.lookup("8.8.8.8") }
+  end
+
   def test_keep_alive_timeout_option
     client = IPData::Client.new(API_KEY, keep_alive_timeout: 30)
     assert_instance_of IPData::Client, client
@@ -65,6 +86,12 @@ class TestClient < Minitest::Test
     assert_request(:get, "/8.8.8.8/city", query: { "api-key" => API_KEY }, body: '"Mountain View"') do
       result = @client.lookup("8.8.8.8", select_field: "city")
       assert_equal "Mountain View", result
+    end
+  end
+
+  def test_lookup_with_select_field_and_no_ip_uses_a_single_segment_path
+    assert_request(:get, "/city", query: { "api-key" => API_KEY }, body: '"Mountain View"') do
+      assert_equal "Mountain View", @client.lookup(select_field: "city")
     end
   end
 
