@@ -4,8 +4,30 @@ $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 require "ipdata"
 require "minitest/autorun"
 
-# Shared test fixtures for the ipdata test suite.
+# Shared test fixtures and helpers for the ipdata test suite.
 module IPDataFixtures
+  # Replace the singleton method +name+ of +receiver+ for the duration of the
+  # block, then restore the original. A +replacement+ that responds to +call+
+  # is invoked with the arguments of each call; any other value is returned
+  # as is. This mirrors Object#stub from minitest/mock, which Minitest 6 no
+  # longer ships (Ruby 4.0 bundles Minitest 6), so the suite does not depend
+  # on it.
+  def with_stub(receiver, name, replacement)
+    singleton = receiver.singleton_class
+    original = :"__original_#{name}"
+    singleton.alias_method(original, name)
+    singleton.define_method(name) do |*args, **kwargs, &block|
+      replacement.respond_to?(:call) ? replacement.call(*args, **kwargs, &block) : replacement
+    end
+    yield
+  ensure
+    if singleton.method_defined?(original) || singleton.private_method_defined?(original)
+      singleton.remove_method(name)
+      singleton.alias_method(name, original)
+      singleton.remove_method(original)
+    end
+  end
+
   SAMPLE_RESPONSE = {
     "ip" => "8.8.8.8",
     "is_eu" => false,
