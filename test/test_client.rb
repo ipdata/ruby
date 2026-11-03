@@ -230,7 +230,7 @@ class TestClient < Minitest::Test
       @client.lookup("8.8.8.8")
     end
 
-    assert_match(/ruby-ipdata\/#{IPData::VERSION}/, captured_request["User-Agent"])
+    assert_match(%r{\Aipdata-ruby/#{Regexp.escape(IPData::VERSION)} }, captured_request["User-Agent"])
     assert_match(/Ruby\/#{RUBY_VERSION}/, captured_request["User-Agent"])
   end
 

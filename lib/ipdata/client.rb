@@ -124,7 +124,7 @@ module IPData
     private
 
     def user_agent
-      @user_agent ||= "ruby-ipdata/#{VERSION} Ruby/#{RUBY_VERSION} (#{RUBY_PLATFORM})"
+      @user_agent ||= "ipdata-ruby/#{VERSION} Ruby/#{RUBY_VERSION} (#{RUBY_PLATFORM})"
     end
 
     def build_cache_key(ip, fields)
