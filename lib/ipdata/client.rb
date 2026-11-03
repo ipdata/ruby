@@ -42,7 +42,8 @@ module IPData
     # @param api_key [String] Your ipdata API key
     # @param cache [IPData::Cache, nil] Optional LRU cache instance
     # @param timeout [Integer] HTTP open, read and write timeout in seconds (default: 30)
-    # @param base_url [String, nil] Override the base URL (default: global endpoint)
+    # @param base_url [String, nil] Override the base URL (default: global endpoint).
+    #   A path prefix, if the URL has one, is kept in front of every request path
     # @param keep_alive_timeout [Integer] Seconds an idle connection is kept before
     #   the next request opens a new one (default: 60)
     def initialize(api_key, cache: nil, timeout: 30, base_url: nil, keep_alive_timeout: 60)
@@ -53,6 +54,7 @@ module IPData
       @timeout = timeout
       @keep_alive_timeout = keep_alive_timeout
       @base_uri = URI.parse(base_url || BASE_URL)
+      @base_path = @base_uri.path.chomp("/")
       @mutex = Mutex.new
       @connection = nil
       @connection_pid = nil
@@ -74,11 +76,7 @@ module IPData
     # @param select_field [String, nil] A single field to extract (returns raw value)
     # @return [Response, Object] Response object, or raw value if select_field is used
     def lookup(ip = nil, fields: nil, select_field: nil)
-      if select_field
-        path = "/#{ip}/#{select_field}"
-        data = get(path)
-        return data
-      end
+      return get(request_path(ip, select_field)) if select_field
 
       cache_key = build_cache_key(ip, fields)
       if @cache
@@ -86,11 +84,10 @@ module IPData
         return cached if cached
       end
 
-      path = ip ? "/#{ip}" : "/"
       params = {}
       params["fields"] = fields.join(",") if fields && !fields.empty?
 
-      data = get(path, params)
+      data = get(request_path(ip), params)
       response = Response.new(data)
 
       @cache&.set(cache_key, response)
@@ -110,7 +107,7 @@ module IPData
       params = {}
       params["fields"] = fields.join(",") if fields && !fields.empty?
 
-      data = post("/bulk", ips, params)
+      data = post(request_path("bulk"), ips, params)
       data.map { |entry| Response.new(entry) }
     end
 
@@ -127,13 +124,20 @@ module IPData
     private
 
     def user_agent
-      @user_agent ||= "ruby-ipdata/#{VERSION} Ruby/#{RUBY_VERSION} (#{RUBY_PLATFORM})"
+      @user_agent ||= "ipdata-ruby/#{VERSION} Ruby/#{RUBY_VERSION} (#{RUBY_PLATFORM})"
     end
 
     def build_cache_key(ip, fields)
       key = ip || "_self"
       key = "#{key}:#{fields.sort.join(",")}" if fields && !fields.empty?
       key
+    end
+
+    # Path of a request made of +segments+, under the path prefix of the base
+    # URL if it has one. Nil segments are skipped, so a lookup of the caller's
+    # own IP uses "/" and its single-field form "/<field>", not "//<field>".
+    def request_path(*segments)
+      "#{@base_path}/#{segments.compact.join('/')}"
     end
 
     def build_uri(path, params = {})

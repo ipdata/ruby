@@ -31,6 +31,27 @@ class TestClient < Minitest::Test
     assert_instance_of IPData::Client, client
   end
 
+  def test_base_url_path_prefix_is_kept_in_request_paths
+    prefixed = -> { IPData::Client.new(API_KEY, base_url: "https://gateway.example.com/ipdata") }
+
+    assert_request(:get, "/ipdata/8.8.8.8", query: { "api-key" => API_KEY }) { prefixed.call.lookup("8.8.8.8") }
+    assert_request(:get, "/ipdata/", query: { "api-key" => API_KEY }) { prefixed.call.lookup }
+    assert_request(:get, "/ipdata/8.8.8.8/city", query: { "api-key" => API_KEY }, body: '"Mountain View"') do
+      assert_equal "Mountain View", prefixed.call.lookup("8.8.8.8", select_field: "city")
+    end
+    assert_request(:post, "/ipdata/bulk", query: { "api-key" => API_KEY }, body: JSON.generate(SAMPLE_BULK_RESPONSE)) do
+      assert_equal 2, prefixed.call.bulk_lookup(["8.8.8.8", "1.1.1.1"]).size
+    end
+  end
+
+  def test_base_url_trailing_slash_does_not_double_the_path_separator
+    client = IPData::Client.new(API_KEY, base_url: "https://gateway.example.com/ipdata/")
+    assert_request(:get, "/ipdata/8.8.8.8", query: { "api-key" => API_KEY }) { client.lookup("8.8.8.8") }
+
+    client = IPData::Client.new(API_KEY, base_url: "https://api.ipdata.co/")
+    assert_request(:get, "/8.8.8.8", query: { "api-key" => API_KEY }) { client.lookup("8.8.8.8") }
+  end
+
   def test_keep_alive_timeout_option
     client = IPData::Client.new(API_KEY, keep_alive_timeout: 30)
     assert_instance_of IPData::Client, client
@@ -65,6 +86,12 @@ class TestClient < Minitest::Test
     assert_request(:get, "/8.8.8.8/city", query: { "api-key" => API_KEY }, body: '"Mountain View"') do
       result = @client.lookup("8.8.8.8", select_field: "city")
       assert_equal "Mountain View", result
+    end
+  end
+
+  def test_lookup_with_select_field_and_no_ip_uses_a_single_segment_path
+    assert_request(:get, "/city", query: { "api-key" => API_KEY }, body: '"Mountain View"') do
+      assert_equal "Mountain View", @client.lookup(select_field: "city")
     end
   end
 
@@ -119,7 +146,7 @@ class TestClient < Minitest::Test
     client = IPData::Client.eu(API_KEY)
 
     called = false
-    Net::HTTP.stub(:new, lambda { |host, port|
+    with_stub(Net::HTTP, :new, lambda { |host, port|
       assert_equal "eu-api.ipdata.co", host
       assert_equal 443, port
       called = true
@@ -155,7 +182,7 @@ class TestClient < Minitest::Test
     client = IPData::Client.new(API_KEY, cache: cache)
     mock = mock_http(stub_http_response)
 
-    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
+    with_stub(Net::HTTP, :new, ->(_h, _p) { mock }) do
       # First call hits the API
       client.lookup("8.8.8.8")
       assert_equal 1, mock.requests.size
@@ -171,7 +198,7 @@ class TestClient < Minitest::Test
     client = IPData::Client.new(API_KEY, cache: cache)
     mock = mock_http(stub_http_response(body: '"Mountain View"'))
 
-    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
+    with_stub(Net::HTTP, :new, ->(_h, _p) { mock }) do
       client.lookup("8.8.8.8", select_field: "city")
       client.lookup("8.8.8.8", select_field: "city")
       assert_equal 2, mock.requests.size
@@ -183,7 +210,7 @@ class TestClient < Minitest::Test
     client = IPData::Client.new(API_KEY, cache: cache)
     mock = mock_http(stub_http_response)
 
-    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
+    with_stub(Net::HTTP, :new, ->(_h, _p) { mock }) do
       client.lookup("8.8.8.8", fields: ["ip"])
       client.lookup("8.8.8.8", fields: ["ip", "city"])
       assert_equal 2, mock.requests.size
@@ -199,11 +226,11 @@ class TestClient < Minitest::Test
       captured_request = req
     end
 
-    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
+    with_stub(Net::HTTP, :new, ->(_h, _p) { mock }) do
       @client.lookup("8.8.8.8")
     end
 
-    assert_match(/ruby-ipdata\/#{IPData::VERSION}/, captured_request["User-Agent"])
+    assert_match(%r{\Aipdata-ruby/#{Regexp.escape(IPData::VERSION)} }, captured_request["User-Agent"])
     assert_match(/Ruby\/#{RUBY_VERSION}/, captured_request["User-Agent"])
   end
 
@@ -216,7 +243,7 @@ class TestClient < Minitest::Test
       captured_request = req
     end
 
-    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
+    with_stub(Net::HTTP, :new, ->(_h, _p) { mock }) do
       @client.lookup("8.8.8.8")
     end
 
@@ -310,7 +337,7 @@ class TestClient < Minitest::Test
     connections = stub_connections do
       @client.lookup("8.8.8.8")
       # Pretend the client was inherited by a forked child process.
-      Process.stub(:pid, Process.pid + 1) { @client.lookup("8.8.8.8") }
+      with_stub(Process, :pid, Process.pid + 1) { @client.lookup("8.8.8.8") }
     end
 
     assert_equal 2, connections.size
@@ -324,7 +351,7 @@ class TestClient < Minitest::Test
   def test_close_in_a_forked_child_leaves_the_inherited_connection_alone
     connections = stub_connections { @client.lookup("8.8.8.8") }
 
-    Process.stub(:pid, Process.pid + 1) { @client.close }
+    with_stub(Process, :pid, Process.pid + 1) { @client.close }
 
     assert connections.first.started?
     assert_equal 0, connections.first.finish_count
@@ -529,12 +556,11 @@ class TestClient < Minitest::Test
       captured_request = req
     end
 
-    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
+    with_stub(Net::HTTP, :new, ->(_h, _p) { mock }) do
       yield
     end
 
     assert captured_request, "Expected HTTP request to be made"
-    uri = URI.parse(captured_request.path.to_s + "?" + (captured_request.instance_variable_get(:@query) || ""))
 
     # Check path
     request_uri = URI.parse(captured_request.uri.to_s)
@@ -556,7 +582,7 @@ class TestClient < Minitest::Test
   def assert_error_response(status, body, error_class)
     http_response = stub_http_response(status: status.to_s, body: body)
 
-    Net::HTTP.stub(:new, ->(_h, _p) { mock_http(http_response) }) do
+    with_stub(Net::HTTP, :new, ->(_h, _p) { mock_http(http_response) }) do
       error = assert_raises(error_class) { @client.lookup("8.8.8.8") }
       assert_equal status, error.status_code
     end
@@ -575,7 +601,7 @@ class TestClient < Minitest::Test
     outcomes = [stub_http_response] if outcomes.empty?
     connections = []
 
-    Net::HTTP.stub(:new, lambda { |host, port|
+    with_stub(Net::HTTP, :new, lambda { |host, port|
       http = mock_http(outcomes.fetch(connections.size, outcomes.last))
       http.address = host
       http.port = port
