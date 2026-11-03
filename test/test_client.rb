@@ -561,7 +561,6 @@ class TestClient < Minitest::Test
     end
 
     assert captured_request, "Expected HTTP request to be made"
-    uri = URI.parse(captured_request.path.to_s + "?" + (captured_request.instance_variable_get(:@query) || ""))
 
     # Check path
     request_uri = URI.parse(captured_request.uri.to_s)
