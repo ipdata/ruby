@@ -31,6 +31,11 @@ class TestClient < Minitest::Test
     assert_instance_of IPData::Client, client
   end
 
+  def test_keep_alive_timeout_option
+    client = IPData::Client.new(API_KEY, keep_alive_timeout: 30)
+    assert_instance_of IPData::Client, client
+  end
+
   # --- lookup ---
 
   def test_lookup_with_ip
@@ -148,49 +153,40 @@ class TestClient < Minitest::Test
   def test_lookup_uses_cache
     cache = IPData::Cache.new
     client = IPData::Client.new(API_KEY, cache: cache)
-    call_count = 0
+    mock = mock_http(stub_http_response)
 
-    Net::HTTP.stub(:new, lambda { |_host, _port|
-      call_count += 1
-      mock_http(stub_http_response)
-    }) do
+    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
       # First call hits the API
       client.lookup("8.8.8.8")
-      assert_equal 1, call_count
+      assert_equal 1, mock.requests.size
 
       # Second call served from cache
       client.lookup("8.8.8.8")
-      assert_equal 1, call_count
+      assert_equal 1, mock.requests.size
     end
   end
 
   def test_select_field_does_not_use_cache
     cache = IPData::Cache.new
     client = IPData::Client.new(API_KEY, cache: cache)
-    call_count = 0
+    mock = mock_http(stub_http_response(body: '"Mountain View"'))
 
-    Net::HTTP.stub(:new, lambda { |_host, _port|
-      call_count += 1
-      mock_http(stub_http_response(body: '"Mountain View"'))
-    }) do
+    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
       client.lookup("8.8.8.8", select_field: "city")
       client.lookup("8.8.8.8", select_field: "city")
-      assert_equal 2, call_count
+      assert_equal 2, mock.requests.size
     end
   end
 
   def test_different_fields_have_different_cache_keys
     cache = IPData::Cache.new
     client = IPData::Client.new(API_KEY, cache: cache)
-    call_count = 0
+    mock = mock_http(stub_http_response)
 
-    Net::HTTP.stub(:new, lambda { |_host, _port|
-      call_count += 1
-      mock_http(stub_http_response)
-    }) do
+    Net::HTTP.stub(:new, ->(_h, _p) { mock }) do
       client.lookup("8.8.8.8", fields: ["ip"])
       client.lookup("8.8.8.8", fields: ["ip", "city"])
-      assert_equal 2, call_count
+      assert_equal 2, mock.requests.size
     end
   end
 
@@ -225,6 +221,300 @@ class TestClient < Minitest::Test
     end
 
     assert_equal "application/json", captured_request["Accept"]
+  end
+
+  # --- Connection reuse ---
+
+  def test_consecutive_calls_reuse_one_connection
+    answer = lambda do |req, &on_response|
+      body = req.method == "POST" ? JSON.generate(SAMPLE_BULK_RESPONSE) : JSON.generate(SAMPLE_RESPONSE)
+      response = stub_http_response(body: body)
+      on_response&.call(response)
+      response
+    end
+
+    connections = stub_connections(answer) do
+      @client.lookup("8.8.8.8")
+      @client.lookup("1.1.1.1")
+      @client.bulk_lookup(["8.8.8.8", "1.1.1.1"])
+    end
+
+    assert_equal 1, connections.size, "expected one Net::HTTP object for the lifetime of the client"
+    http = connections.first
+    assert_equal %w[GET GET POST], http.requests.map(&:method)
+    assert_equal 1, http.start_count
+    assert http.started?, "the connection stays open between requests"
+  end
+
+  def test_connection_is_configured_from_options_and_started_before_use
+    client = IPData::Client.new(API_KEY, timeout: 7, keep_alive_timeout: 12)
+    connections = stub_connections { client.lookup("8.8.8.8") }
+
+    http = connections.first
+    assert_equal "api.ipdata.co", http.address
+    assert_equal 443, http.port
+    assert_equal true, http.settings[:use_ssl]
+    assert_equal 7, http.settings[:open_timeout]
+    assert_equal 7, http.settings[:read_timeout]
+    assert_equal 7, http.settings[:write_timeout]
+    assert_equal 12, http.settings[:keep_alive_timeout]
+    assert_equal 1, http.settings[:max_retries]
+    assert_equal 1, http.start_count
+  end
+
+  def test_keep_alive_timeout_defaults_to_60_seconds
+    connections = stub_connections { @client.lookup("8.8.8.8") }
+    assert_equal 60, connections.first.settings[:keep_alive_timeout]
+  end
+
+  def test_use_ssl_follows_the_base_url_scheme
+    client = IPData::Client.new(API_KEY, base_url: "http://localhost:8080")
+    connections = stub_connections { client.lookup("8.8.8.8") }
+
+    http = connections.first
+    assert_equal "localhost", http.address
+    assert_equal 8080, http.port
+    assert_equal false, http.settings[:use_ssl]
+  end
+
+  def test_close_finishes_the_connection
+    connections = stub_connections { @client.lookup("8.8.8.8") }
+    http = connections.first
+    assert http.started?
+
+    assert_nil @client.close
+
+    refute http.started?
+    assert_equal 1, http.finish_count
+  end
+
+  def test_close_without_a_connection_is_a_no_op
+    assert_nil @client.close
+    assert_nil @client.close
+  end
+
+  def test_lookup_after_close_opens_a_new_connection
+    connections = stub_connections do
+      @client.lookup("8.8.8.8")
+      @client.close
+      @client.lookup("8.8.8.8")
+    end
+
+    assert_equal 2, connections.size
+    refute connections[0].started?
+    assert connections[1].started?
+    assert_equal [1, 1], connections.map { |http| http.requests.size }
+  end
+
+  def test_pid_change_reconnects_without_finishing_the_inherited_connection
+    connections = stub_connections do
+      @client.lookup("8.8.8.8")
+      # Pretend the client was inherited by a forked child process.
+      Process.stub(:pid, Process.pid + 1) { @client.lookup("8.8.8.8") }
+    end
+
+    assert_equal 2, connections.size
+    inherited, own = connections
+    assert inherited.started?, "the parent's connection must not be finished from the child"
+    assert_equal 0, inherited.finish_count
+    assert_equal 1, inherited.requests.size
+    assert_equal 1, own.requests.size
+  end
+
+  def test_close_in_a_forked_child_leaves_the_inherited_connection_alone
+    connections = stub_connections { @client.lookup("8.8.8.8") }
+
+    Process.stub(:pid, Process.pid + 1) { @client.close }
+
+    assert connections.first.started?
+    assert_equal 0, connections.first.finish_count
+  end
+
+  def test_bulk_lookup_is_retried_once_on_a_dead_connection
+    bulk = stub_http_response(body: JSON.generate(SAMPLE_BULK_RESPONSE))
+    connections = stub_connections(EOFError.new("end of file reached"), bulk) do
+      responses = @client.bulk_lookup(["8.8.8.8", "1.1.1.1"])
+      assert_equal ["8.8.8.8", "1.1.1.1"], responses.map(&:ip)
+    end
+
+    assert_equal 2, connections.size, "the dead connection is discarded and a new one opened"
+    dead, fresh = connections
+    assert_equal 1, dead.requests.size
+    assert_equal 1, dead.finish_count
+    assert_equal 1, fresh.requests.size
+    assert_equal "POST", fresh.requests.first.method
+    assert_equal JSON.generate(["8.8.8.8", "1.1.1.1"]), fresh.requests.first.body
+  end
+
+  def test_bulk_lookup_is_retried_on_each_dead_connection_error
+    errors = [
+      IOError.new("closed stream"),
+      Errno::ECONNRESET.new,
+      Errno::EPIPE.new,
+      OpenSSL::SSL::SSLError.new("SSL_read: unexpected eof while reading")
+    ]
+
+    errors.each do |error|
+      client = IPData::Client.new(API_KEY)
+      bulk = stub_http_response(body: JSON.generate([SAMPLE_RESPONSE]))
+      connections = stub_connections(error, bulk) do
+        assert_equal 1, client.bulk_lookup(["8.8.8.8"]).size, "expected a retry after #{error.class}"
+      end
+      assert_equal 2, connections.size, "expected a new connection after #{error.class}"
+    end
+  end
+
+  def test_bulk_lookup_is_retried_only_once
+    connections = stub_connections(EOFError.new("end of file reached")) do
+      assert_raises(EOFError) { @client.bulk_lookup(["8.8.8.8"]) }
+    end
+
+    assert_equal 2, connections.size
+    assert_equal [1, 1], connections.map { |http| http.requests.size }
+  end
+
+  def test_bulk_lookup_is_not_retried_after_response_bytes_arrived
+    dies_mid_body = lambda do |_req, &on_response|
+      on_response&.call(stub_http_response)
+      raise EOFError, "end of file reached"
+    end
+
+    connections = stub_connections(dies_mid_body) do
+      assert_raises(EOFError) { @client.bulk_lookup(["8.8.8.8"]) }
+    end
+
+    assert_equal 1, connections.size
+    assert_equal 1, connections.first.requests.size
+  end
+
+  def test_bulk_lookup_is_not_retried_on_an_http_error_status
+    failure = stub_http_response(status: "500", body: '{"message": "Server error"}')
+    connections = stub_connections(failure) do
+      assert_raises(IPData::Error) { @client.bulk_lookup(["8.8.8.8"]) }
+    end
+
+    assert_equal 1, connections.size
+    assert_equal 1, connections.first.requests.size
+  end
+
+  def test_bulk_lookup_is_not_retried_on_a_timeout
+    connections = stub_connections(Net::ReadTimeout.new) do
+      assert_raises(Net::ReadTimeout) { @client.bulk_lookup(["8.8.8.8"]) }
+    end
+
+    assert_equal 1, connections.size
+    assert_equal 1, connections.first.requests.size
+  end
+
+  def test_get_is_not_retried_by_the_client
+    # Net::HTTP retries idempotent requests itself; the client must not add a second attempt.
+    connections = stub_connections(EOFError.new("end of file reached")) do
+      assert_raises(EOFError) { @client.lookup("8.8.8.8") }
+    end
+
+    assert_equal 1, connections.size
+    assert_equal 1, connections.first.requests.size
+  end
+
+  def test_dead_connection_is_replaced_on_the_next_call
+    connections = stub_connections(EOFError.new("end of file reached"), stub_http_response) do
+      assert_raises(EOFError) { @client.lookup("8.8.8.8") }
+      @client.lookup("8.8.8.8")
+    end
+
+    assert_equal 2, connections.size
+    assert_equal 1, connections[0].finish_count
+    assert connections[1].started?
+  end
+
+  def test_requests_from_several_threads_are_serialised_on_the_one_connection
+    in_flight = 0
+    max_in_flight = 0
+    counter = Mutex.new
+    one_at_a_time = lambda do |_req, &on_response|
+      counter.synchronize do
+        in_flight += 1
+        max_in_flight = [max_in_flight, in_flight].max
+      end
+      Thread.pass
+      response = stub_http_response
+      on_response&.call(response)
+      counter.synchronize { in_flight -= 1 }
+      response
+    end
+
+    connections = stub_connections(one_at_a_time) do
+      threads = Array.new(4) { Thread.new { 25.times { @client.lookup("8.8.8.8") } } }
+      threads.each(&:join)
+    end
+
+    assert_equal 1, connections.size
+    assert_equal 100, connections.first.requests.size
+    assert_equal 1, max_in_flight, "requests must not overlap on the shared connection"
+  end
+
+  # --- is_satellite / is_anycast and blocklist dates ---
+
+  def test_lookup_exposes_is_satellite
+    body = JSON.generate(SAMPLE_SATELLITE_RESPONSE)
+    assert_request(:get, "/98.97.34.0", query: { "api-key" => API_KEY }, body: body) do
+      response = @client.lookup("98.97.34.0")
+      assert_equal true, response.is_satellite
+      assert_equal false, response.is_anycast
+      assert_equal "AS14593", response.asn.asn
+    end
+  end
+
+  def test_lookup_exposes_is_anycast_and_dated_blocklist_entries
+    body = JSON.generate(SAMPLE_ANYCAST_RESPONSE)
+    assert_request(:get, "/8.8.8.8", query: { "api-key" => API_KEY }, body: body) do
+      response = @client.lookup("8.8.8.8")
+      assert_equal true, response.is_anycast
+      assert_equal false, response.is_satellite
+
+      entry = response.threat.blocklists.first
+      assert_equal "2026-11-02", entry.first_seen
+      assert_equal "2026-11-02", entry.last_seen
+      assert_equal 1, entry.days_seen
+    end
+  end
+
+  def test_fields_accept_the_new_flag_names
+    query = { "api-key" => API_KEY, "fields" => "ip,is_satellite,is_anycast" }
+    assert_request(:get, "/8.8.8.8", query: query, body: JSON.generate("ip" => "8.8.8.8")) do
+      response = @client.lookup("8.8.8.8", fields: ["ip", "is_satellite", "is_anycast"])
+      assert_equal "8.8.8.8", response.ip
+      assert_equal false, response.is_satellite
+      assert_equal false, response.is_anycast
+    end
+  end
+
+  def test_select_field_accepts_the_new_flag_names
+    assert_request(:get, "/98.97.34.0/is_satellite", query: { "api-key" => API_KEY }, body: "true") do
+      assert_equal true, @client.lookup("98.97.34.0", select_field: "is_satellite")
+    end
+  end
+
+  def test_bulk_lookup_items_carry_the_new_fields
+    ips = ["8.8.8.8", "187.13.250.1"]
+    body = JSON.generate([SAMPLE_ANYCAST_RESPONSE, SAMPLE_VPN_RESPONSE])
+
+    assert_request(:post, "/bulk", query: { "api-key" => API_KEY }, body: body, request_body: JSON.generate(ips)) do
+      anycast, vpn = @client.bulk_lookup(ips)
+
+      assert_equal true, anycast.is_anycast
+      assert_equal false, anycast.is_satellite
+      assert_equal "2026-11-02", anycast.threat.blocklists.first.first_seen
+
+      assert_equal false, vpn.is_anycast
+      assert_equal false, vpn.is_satellite
+      assert_equal true, vpn.threat.is_vpn
+      assert_equal 6, vpn.threat.blocklists.size
+      assert_equal "2026-10-31", vpn.threat.blocklists.first.first_seen
+      assert_equal 2, vpn.threat.blocklists.first.days_seen
+      refute vpn.threat.blocklists[2].key?("first_seen")
+      assert_nil vpn.threat.blocklists[2]["days_seen"]
+    end
   end
 
   private
@@ -272,18 +562,88 @@ class TestClient < Minitest::Test
     end
   end
 
-  # Create a mock Net::HTTP object that returns the given response.
-  def mock_http(response, &on_request)
-    http = Object.new
+  # Create a fake Net::HTTP that answers every request with +outcome+ (see FakeHTTP).
+  def mock_http(outcome, &on_request)
+    FakeHTTP.new(outcome, &on_request)
+  end
 
-    http.define_singleton_method(:use_ssl=) { |_v| }
-    http.define_singleton_method(:open_timeout=) { |_v| }
-    http.define_singleton_method(:read_timeout=) { |_v| }
-    http.define_singleton_method(:request) do |req|
-      on_request&.call(req)
-      response
+  # Stub Net::HTTP.new to hand out a new FakeHTTP per call and return every
+  # connection the client opened. Connection i answers with outcomes[i] (the
+  # last outcome repeats); with no outcomes every connection returns the
+  # sample response.
+  def stub_connections(*outcomes)
+    outcomes = [stub_http_response] if outcomes.empty?
+    connections = []
+
+    Net::HTTP.stub(:new, lambda { |host, port|
+      http = mock_http(outcomes.fetch(connections.size, outcomes.last))
+      http.address = host
+      http.port = port
+      connections << http
+      http
+    }) do
+      yield
     end
 
-    http
+    connections
+  end
+
+  # Stand-in for Net::HTTP that records how the client configures and drives it.
+  #
+  # +outcome+ is the response to return, an exception to raise before any
+  # response byte arrives (a dead connection), or a Proc called with the
+  # request and the response block for finer control.
+  class FakeHTTP
+    attr_accessor :address, :port
+    attr_reader :settings, :requests, :start_count, :finish_count
+
+    def initialize(outcome, &on_request)
+      @outcome = outcome
+      @on_request = on_request
+      @settings = {}
+      @requests = []
+      @started = false
+      @start_count = 0
+      @finish_count = 0
+    end
+
+    %i[use_ssl open_timeout read_timeout write_timeout keep_alive_timeout max_retries].each do |setting|
+      define_method(:"#{setting}=") { |value| @settings[setting] = value }
+    end
+
+    def start
+      raise IOError, "HTTP session already opened" if @started
+
+      @started = true
+      @start_count += 1
+      self
+    end
+
+    def started?
+      @started
+    end
+
+    def finish
+      raise IOError, "HTTP session not yet started" unless @started
+
+      @started = false
+      @finish_count += 1
+    end
+
+    # Like Net::HTTP#request: yields the response once its headers arrived, then returns it.
+    def request(req, &on_response)
+      raise Minitest::Assertion, "request sent on a connection that was not started" unless @started
+
+      @requests << req
+      @on_request&.call(req)
+
+      case @outcome
+      when Proc then @outcome.call(req, &on_response)
+      when Exception then raise @outcome
+      else
+        on_response&.call(@outcome)
+        @outcome
+      end
+    end
   end
 end
